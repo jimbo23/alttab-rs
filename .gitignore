@@ -1,0 +1,4 @@
+target/
+dist/
+assets/icon/build/
+.omp-runs/*.log
