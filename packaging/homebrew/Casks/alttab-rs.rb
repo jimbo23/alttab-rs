@@ -4,10 +4,10 @@ cask "alttab-rs" do
 
   url "https://github.com/jimbo23/alttab-rs/releases/download/v#{version}/AltTab-rs-#{version}.zip"
   name "AltTab-rs"
-  desc "Native Rust window switcher for macOS, derived from AltTab"
+  desc "Native Rust window switcher derived from AltTab"
   homepage "https://github.com/jimbo23/alttab-rs"
 
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "AltTab-rs.app"
 
