@@ -26,6 +26,6 @@ cask "alttab-rs" do
       brew install --cask --no-quarantine jimbo23/alttab-rs/alttab-rs
     Or remove quarantine after installation:
       xattr -dr com.apple.quarantine /Applications/AltTab-rs.app
-    AltTab-rs is a GPL-3.0-or-later derivative of AltTab by lwouis and contributors.
+    AltTab-rs is a GPL-3.0-only derivative of AltTab by lwouis and contributors.
   EOS
 end

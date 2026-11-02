@@ -14,6 +14,6 @@
     <key>LSMinimumSystemVersion</key><string>12.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key>
-    <string>AltTab-rs contributors. Licensed under GPL-3.0-or-later. Derived from AltTab by lwouis and contributors (https://github.com/lwouis/alt-tab-macos), GPL-3.0.</string>
+    <string>AltTab-rs contributors. Licensed under GPL-3.0-only. Derived from AltTab by lwouis and contributors (https://github.com/lwouis/alt-tab-macos), GPL-3.0.</string>
 </dict>
 </plist>

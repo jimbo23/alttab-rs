@@ -53,7 +53,7 @@ Recording enables window thumbnails and can be skipped for icon/title switching.
 cache, and saved window state listed in the cask; ordinary uninstall preserves
 those files. macOS permission grants are managed by the OS, not removed by zap.
 
-AltTab-rs is GPL-3.0-or-later and derives from
+AltTab-rs is GPL-3.0-only and derives from
 [AltTab by lwouis and contributors](https://github.com/lwouis/alt-tab-macos).
 The application bundle includes the license and upstream attribution. Neither
 the icon nor upstream's application/signing identity is replaced by packaging.

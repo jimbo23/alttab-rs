@@ -1,6 +1,6 @@
 # AltTab-rs
 
-A native Rust macOS window switcher derived from [AltTab](https://github.com/lwouis/alt-tab-macos), by **lwouis and the AltTab contributors**. This is a derivative GPL-3.0 work, distributed as **GPL-3.0-or-later**; see [LICENSE](LICENSE) and [attribution](docs/ATTRIBUTION.md). Not affiliated with or endorsed by the upstream project.
+A native Rust macOS window switcher derived from [AltTab](https://github.com/lwouis/alt-tab-macos), by **lwouis and the AltTab contributors**. This is a derivative work of GPL-3.0 code and is distributed under the same license, **GPL-3.0-only**; see [LICENSE](LICENSE) and [attribution](docs/ATTRIBUTION.md). Not affiliated with or endorsed by the upstream project.
 
 Hold **Option**, press **Tab** to select another window, then release Option to focus it. Shift-Tab reverses direction; arrows navigate; Escape cancels. Preferences offer Command instead of Option. The application uses a menu-bar item rather than a Dock icon.
 
