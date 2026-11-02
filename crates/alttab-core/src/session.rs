@@ -52,6 +52,7 @@ pub enum Input {
     Show { generation: u64 },
     SetRows(Vec<Rect>),
     Physical { serial: u64, action: PhysicalAction },
+    EnterSearch,
     ExitSearch,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,7 +151,9 @@ impl Session {
     }
     fn default_selection(&self) -> Option<ItemKey> {
         let index = usize::from(
-            self.items.len() > 1 && self.attended.is_some_and(|key| self.items.contains(&key)),
+            !self.searching
+                && self.items.len() > 1
+                && self.attended.is_some_and(|key| self.items.contains(&key)),
         );
         self.items.get(index).copied()
     }
@@ -165,6 +168,10 @@ impl Session {
         self.items = unique(items);
         self.rects.clear();
         if self.items.is_empty() {
+            if self.searching {
+                self.selected = None;
+                return self.render();
+            }
             return self.finish(false);
         }
         if !self.navigated {
@@ -230,6 +237,10 @@ impl Session {
                     self.rects = rects;
                 }
                 Vec::new()
+            }
+            Input::EnterSearch => {
+                self.searching = true;
+                self.render()
             }
             Input::ExitSearch => {
                 self.searching = false;

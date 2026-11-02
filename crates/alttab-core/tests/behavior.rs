@@ -1245,3 +1245,60 @@ fn configured_selected_capture_rate_is_enforced_without_rounding_above_ceiling()
         assert!(cadence.admit(item(1), interval, true, true, Style::Thumbnails, true));
     }
 }
+
+#[test]
+fn search_holds_session_open_for_zero_results_and_can_restore_candidates() {
+    let mut session = open_session(vec![item(1), item(2)]);
+    assert_eq!(session.handle(Input::EnterSearch), vec![Effect::Render]);
+    assert!(session.searching());
+    assert!(session
+        .handle(Input::Modifiers(Modifiers::default()))
+        .is_empty());
+    assert_eq!(session.reconcile(Vec::new()), vec![Effect::Render]);
+    assert_eq!(session.phase(), Phase::Visible);
+    assert_eq!(session.selected(), None);
+    assert!(session
+        .handle(Input::Cycle {
+            backward: false,
+            repeat: false
+        })
+        .is_empty());
+    assert_eq!(
+        session.reconcile(vec![item(1), item(2)]),
+        vec![Effect::Render]
+    );
+    assert_eq!(session.selected(), Some(item(1)));
+    session.handle(Input::ExitSearch);
+    assert!(!session.searching());
+    assert!(session
+        .handle(Input::Modifiers(Modifiers::default()))
+        .contains(&Effect::Focus(item(1))));
+}
+
+#[test]
+fn accepting_or_cancelling_an_empty_search_never_focuses_a_stale_selection() {
+    for action in [Input::Accept, Input::Cancel] {
+        let mut session = open_session(vec![item(1), item(2)]);
+        session.handle(Input::EnterSearch);
+        session.reconcile(Vec::new());
+        let generation = session.generation();
+        assert_eq!(session.handle(action), vec![Effect::Hide { generation }]);
+        assert_eq!(session.phase(), Phase::Idle);
+        assert!(session.handle(Input::EnterSearch).is_empty());
+        assert!(!session.searching());
+    }
+}
+
+#[test]
+fn search_defaults_to_top_ranked_result_even_when_attended_window_is_present() {
+    let mut session = open_session(vec![item(1), item(2), item(3)]);
+    session.handle(Input::EnterSearch);
+    session.reconcile(vec![item(3), item(1), item(2)]);
+    assert_eq!(session.selected(), Some(item(3)));
+    session.handle(Input::Cycle {
+        backward: false,
+        repeat: false,
+    });
+    session.reconcile(vec![item(2), item(3), item(1)]);
+    assert_eq!(session.selected(), Some(item(1)));
+}
