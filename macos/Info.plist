@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>io.github.jimbo23.alttab-rs</string>
+    <key>CFBundleName</key><string>AltTab-rs</string>
+    <key>CFBundleDisplayName</key><string>AltTab-rs</string>
+    <key>CFBundleExecutable</key><string>alttab-rs</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>0.1.0</string>
+    <key>LSUIElement</key><true/>
+    <key>LSMinimumSystemVersion</key><string>12.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>AltTab-rs contributors. Licensed under GPL-3.0-or-later. Derived from AltTab by lwouis and contributors (https://github.com/lwouis/alt-tab-macos), GPL-3.0.</string>
+</dict>
+</plist>
