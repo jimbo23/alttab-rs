@@ -2,11 +2,11 @@
 
 ## Status and evidence boundary
 
-Phase 1 design only: no Cargo workspace, executable, FFI implementation, or
-performance result is delivered by this phase. All **Decisions** below describe
-the intended rewrite, not existing Rust behavior. [SPEC.md](SPEC.md) records
-upstream observations and source citations. [ATTRIBUTION.md](ATTRIBUTION.md)
-records the GPL-3.0 derivative relationship.
+The phase-1 design below is the behavioral and ownership contract for the Rust
+implementation. [SPEC.md](SPEC.md) records upstream observations and source
+citations; [ATTRIBUTION.md](ATTRIBUTION.md) records the GPL derivative relationship.
+The implementation and its verified platform boundary are described in the root
+README. Design targets below are not measured performance results.
 
 **Observation:** upstream isolates AX, WindowServer, and process IPC in separate
 bounded schedulers (`src/macos/AXCallScheduler.swift:3-31,61-95`,
@@ -25,7 +25,7 @@ ownership and IPC, rather than one Rust crate per upstream Swift class.
 **Decision:** create this workspace in the implementation phase:
 
 ```text
-Cargo.toml                       # resolver = "3", edition = "2024"
+Cargo.toml                       # resolver = "2", edition = "2021"
 Cargo.lock                       # committed for reproducible application builds
 crates/
   alttab-core/
@@ -67,19 +67,18 @@ platform-independent testability, not a claim of measured 100% test coverage.
 Filesystem persistence accepts an explicit path and is tested in temporary
 Linux directories. macOS supplies the application-support directory.
 
-The binary depends on core; core never depends on the binary. Set workspace
-`default-members` to core so ordinary Linux checks do not link Apple frameworks.
-Keep Apple dependencies under `cfg(target_os = "macos")`; the binary emits a
-clear unsupported-platform build error when explicitly selected elsewhere.
+The binary depends on core; core never depends on the binary. Workspace
+`default-members` is core. Apple dependencies remain under
+`cfg(target_os = "macos")`; explicitly running the binary on another platform
+prints an unsupported-platform message.
 No Electron, webview, SwiftUI, Interface Builder, Tokio runtime, database,
 image-codec stack, or general-purpose GUI framework.
 
-**Decision:** Rust 1.85 minimum for edition 2024 and the selected TOML crate;
-validate the resolved dependency graph against that minimum before claiming MSRV
-support. Initial macOS deployment target is 14.0 on arm64 and x86_64, allowing
-SCScreenshotManager without a second legacy capture implementation. This is a
-rewrite support choice, not upstream platform parity. Private-SkyLight failure
-must not prevent icon/title switching for publicly discoverable windows.
+The implementation uses edition 2021; no minimum Rust version is promised beyond
+the toolchain verified in the README. Deployment targets macOS 12.0 on arm64 and
+x86_64. Capture uses SCScreenshotManager on macOS 14+ and a downscaled
+CGWindowListCreateImage fallback on older systems. Private-API failure must not
+prevent icon/title switching for publicly discoverable windows.
 
 ## Dependency pins and provenance
 
@@ -394,6 +393,7 @@ title_truncation = "end"
 cache_mib = 32
 selected_max_hz = 5
 other_max_hz = 1
+evict_on_hide = true
 
 [[shortcuts]]
 id = "all_windows"
