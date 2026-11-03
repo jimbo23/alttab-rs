@@ -64,6 +64,13 @@ pub enum Event {
     Permissions,
     Setting(isize),
     Click(usize),
+    Pointer {
+        x: f64,
+        y_from_top: f64,
+        screen_x: f64,
+        screen_y: f64,
+    },
+    PointerExited,
     DismissError,
     TapReset,
     Error(String),
@@ -122,6 +129,7 @@ pub fn run() {
             inventory: Inventory::default(),
             mru: Mru::default(),
             session: Session::default(),
+            pointer_gate: PointerGate::new(HOVER_DEAD_ZONE),
             app_keys: HashMap::new(),
             window_keys: HashMap::new(),
             serial: 0,
@@ -182,6 +190,7 @@ struct Coordinator {
     inventory: Inventory,
     mru: Mru,
     session: Session,
+    pointer_gate: PointerGate,
     app_keys: HashMap<i32, AppKey>,
     window_keys: HashMap<(AppKey, u32), WindowKey>,
     serial: u64,
@@ -257,9 +266,12 @@ impl Coordinator {
                 }
             }
             Event::Show(generation) => {
-                let reveal = self.session.phase() == Phase::PendingShow
-                    && self.session.generation() == generation
-                    && self.session.searching();
+                let showing = self.session.phase() == Phase::PendingShow
+                    && self.session.generation() == generation;
+                let reveal = showing && self.session.searching();
+                if showing {
+                    self.arm_pointer();
+                }
                 let effects = self.session.handle(Input::Show { generation });
                 self.effects(effects);
                 if reveal {
@@ -359,10 +371,33 @@ impl Coordinator {
                 .permissions(self.trusted, self.recording, self.started),
             Event::Setting(tag) => self.setting(tag),
             Event::Click(index) => {
-                if let Some(key) = self.session.items().get(index).copied() {
-                    let effects = self.session.handle(Input::Cancel);
+                if let Some(&(key, _, _)) = self.entries.get(index) {
+                    let effects = self.session.handle(Input::Pick(key));
                     self.effects(effects);
-                    self.focus(key);
+                }
+            }
+            Event::Pointer {
+                x,
+                y_from_top,
+                screen_x,
+                screen_y,
+            } => {
+                if self.session.phase() == Phase::Visible
+                    && self.pointer_gate.moved(screen_x, screen_y)
+                {
+                    let key = self
+                        .layout
+                        .hit_test(x, y_from_top)
+                        .and_then(|index| self.entries.get(index))
+                        .map(|entry| entry.0);
+                    let effects = self.session.handle(Input::Hover(key));
+                    self.effects(effects);
+                }
+            }
+            Event::PointerExited => {
+                if self.session.phase() == Phase::Visible {
+                    let effects = self.session.handle(Input::Hover(None));
+                    self.effects(effects);
                 }
             }
             Event::TapReset => {
@@ -564,6 +599,7 @@ impl Coordinator {
         }
         self.query.clear();
         let items = self.candidates(profile);
+        self.arm_pointer();
         let profile_config = &self.config.shortcuts[profile];
         self.cache.begin_session();
         self.capture_attempts.clear();
@@ -679,6 +715,7 @@ impl Coordinator {
                     Event::Show(generation),
                 ),
                 Effect::Hide { .. } => {
+                    self.pointer_gate.reset();
                     input::active(false);
                     input::search(false);
                     self.ui.hide();
@@ -694,6 +731,14 @@ impl Coordinator {
                 Effect::Focus(key) => self.focus(key),
             }
         }
+    }
+    /// Anchor the hover dead zone where the pointer rests when the panel
+    /// appears, so a cursor already over a tile cannot steal the selection
+    /// until it deliberately moves (upstream CursorEvents.swift:157-187).
+    fn arm_pointer(&mut self) {
+        self.pointer_gate.reset();
+        let (x, y) = self.ui.pointer_cocoa();
+        self.pointer_gate.moved(x, y);
     }
     fn focus(&self, key: ItemKey) {
         post(Event::Focus {
@@ -911,7 +956,8 @@ impl Coordinator {
             self.ui.selection(
                 self.session
                     .selected()
-                    .and_then(|key| self.session.items().iter().position(|item| *item == key)),
+                    .and_then(|key| self.entries.iter().position(|entry| entry.0 == key)),
+                self.session.selection_source() == SelectionSource::Keyboard,
             );
             self.capture_next();
             return;
@@ -984,6 +1030,7 @@ impl Coordinator {
             &self.images,
             self.config.appearance.style,
             self.session.searching(),
+            self.session.selection_source() == SelectionSource::Keyboard,
         );
         for (key, _, _) in &self.entries {
             self.cache.touch(*key);
@@ -1061,7 +1108,7 @@ impl Coordinator {
             let ItemKey::Window(window) = key else {
                 continue;
             };
-            let Some(index) = self.session.items().iter().position(|item| *item == key) else {
+            let Some(index) = self.entries.iter().position(|entry| entry.0 == key) else {
                 continue;
             };
             let Some(tile) = self.layout.tiles.get(index) else {
@@ -1123,12 +1170,7 @@ impl Coordinator {
                     self.evict_image(key);
                 }
                 self.images.insert(request.key, image);
-                if let Some(index) = self
-                    .session
-                    .items()
-                    .iter()
-                    .position(|key| *key == request.key)
-                {
+                if let Some(index) = self.entries.iter().position(|entry| entry.0 == request.key) {
                     self.ui.screenshot(index, self.images.get(&request.key));
                 }
             }

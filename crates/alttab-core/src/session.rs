@@ -28,6 +28,12 @@ pub enum Phase {
     PendingShow,
     Visible,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionSource {
+    #[default]
+    Keyboard,
+    Pointer,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
     Left,
@@ -46,6 +52,8 @@ pub enum Effect {
 pub enum Input {
     Cycle { backward: bool, repeat: bool },
     Arrow { direction: Direction, repeat: bool },
+    Hover(Option<ItemKey>),
+    Pick(ItemKey),
     Modifiers(Modifiers),
     Accept,
     Cancel,
@@ -71,6 +79,8 @@ pub struct Session {
     release: ReleaseAction,
     items: Vec<ItemKey>,
     selected: Option<ItemKey>,
+    hovered: Option<ItemKey>,
+    selection_source: SelectionSource,
     attended: Option<ItemKey>,
     navigated: bool,
     rects: Vec<Rect>,
@@ -89,6 +99,9 @@ impl Session {
     }
     pub fn selected(&self) -> Option<ItemKey> {
         self.selected
+    }
+    pub fn selection_source(&self) -> SelectionSource {
+        self.selection_source
     }
     pub fn items(&self) -> &[ItemKey] {
         &self.items
@@ -115,6 +128,8 @@ impl Session {
         self.release = release;
         self.attended = attended;
         self.items = unique(items);
+        self.hovered = None;
+        self.selection_source = SelectionSource::Keyboard;
         self.rects.clear();
         self.searching = release == ReleaseAction::Search;
         if self.items.is_empty() {
@@ -166,6 +181,7 @@ impl Session {
             .and_then(|key| self.items.iter().position(|item| *item == key))
             .unwrap_or(0);
         self.items = unique(items);
+        self.hovered = self.hovered.filter(|key| self.items.contains(key));
         self.rects.clear();
         if self.items.is_empty() {
             if self.searching {
@@ -208,6 +224,24 @@ impl Session {
         match input {
             Input::Accept => self.finish(true),
             Input::Cancel => self.finish(false),
+            Input::Hover(key) if self.phase == Phase::Visible => {
+                let Some(key) = key else {
+                    self.hovered = None;
+                    return Vec::new();
+                };
+                if self.hovered == Some(key) || !self.items.contains(&key) {
+                    return Vec::new();
+                }
+                self.hovered = Some(key);
+                self.selected = Some(key);
+                self.navigated = true;
+                self.selection_source = SelectionSource::Pointer;
+                self.render()
+            }
+            Input::Pick(key) if self.items.contains(&key) => {
+                self.selected = Some(key);
+                self.finish(true)
+            }
             Input::Modifiers(flags)
                 if self.hold.0 != 0
                     && !flags.contains(self.hold)
@@ -257,6 +291,7 @@ impl Session {
         }
     }
     fn cycle(&mut self, backward: bool, repeat: bool) -> Vec<Effect> {
+        self.selection_source = SelectionSource::Keyboard;
         let Some(index) = self
             .selected
             .and_then(|key| self.items.iter().position(|item| *item == key))
@@ -285,6 +320,7 @@ impl Session {
         self.render()
     }
     fn vertical(&mut self, direction: Direction, repeat: bool) -> Vec<Effect> {
+        self.selection_source = SelectionSource::Keyboard;
         let Some(index) = self
             .selected
             .and_then(|key| self.items.iter().position(|item| *item == key))
@@ -338,6 +374,8 @@ impl Session {
         let target = self.selected;
         self.phase = Phase::Idle;
         self.selected = None;
+        self.hovered = None;
+        self.selection_source = SelectionSource::Keyboard;
         self.items.clear();
         self.rects.clear();
         self.searching = false;

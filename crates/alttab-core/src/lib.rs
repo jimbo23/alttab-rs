@@ -4,6 +4,7 @@ pub mod filter;
 pub mod layout;
 pub mod model;
 pub mod order;
+pub mod pointer;
 pub mod session;
 pub mod thumbnail;
 
@@ -12,5 +13,6 @@ pub use filter::*;
 pub use layout::*;
 pub use model::*;
 pub use order::*;
+pub use pointer::*;
 pub use session::*;
 pub use thumbnail::*;

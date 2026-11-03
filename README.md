@@ -2,7 +2,7 @@
 
 A native Rust macOS window switcher derived from [AltTab](https://github.com/lwouis/alt-tab-macos), by **lwouis and the AltTab contributors**. This is a derivative work of GPL-3.0 code and is distributed under the same license, **GPL-3.0-only**; see [LICENSE](LICENSE) and [attribution](docs/ATTRIBUTION.md). Not affiliated with or endorsed by the upstream project.
 
-Hold **Option**, press **Tab** to select another window, then release Option to focus it. Shift-Tab reverses direction; arrows navigate; Escape cancels. Preferences offer Command instead of Option. The application uses a menu-bar item rather than a Dock icon.
+Hold **Option**, press **Tab** to select another window, then release Option to focus it. Shift-Tab reverses direction; arrows navigate; Escape cancels. Mouse hover selects after moving beyond a 25-point dead zone; clicking a tile focuses it immediately. Preferences offer Command instead of Option. The application uses a menu-bar item rather than a Dock icon.
 
 ## Install
 
@@ -39,6 +39,7 @@ Memory policy: capture only for a visible thumbnail switcher, downscale to displ
 |---|---|
 | Window model, MRU, composable filtering | Done in portable core; native discovery needs macOS validation |
 | Option/Command-Tab, reverse, arrows, release-to-focus, Escape | Done; native delivery needs macOS validation |
+| Mouse hover selection and click-to-focus | Done with jitter protection and keyboard continuation; native interaction needs macOS validation |
 | Thumbnail, icon, and title presentations | Done; native rendering needs macOS validation |
 | Minimized, hidden, fullscreen preferences | Done; AX behavior needs macOS validation |
 | Multiple displays and Spaces | Partial: geometry/display filtering and optional runtime-resolved SkyLight membership; not upstream WindowServer parity |
@@ -89,10 +90,10 @@ cargo clippy --target x86_64-apple-darwin -p alttab-macos -- -D warnings
 ```
 
 Portable validation on the Linux implementation host used Rust 1.99.1:
-37 behavior tests passed, strict workspace Clippy passed, and a temporary
-smoke program exercised filtering → layout → release-to-focus → cache teardown
-(three candidates, three tiles, zero hidden thumbnail bytes). The Linux binary
-printed its unsupported-platform message. The smoke program was then removed.
+47 behavior tests passed, strict workspace Clippy passed, and a temporary
+smoke program exercised layout hit-testing, the pointer dead zone, hover → keyboard
+continuation, same-tile jitter protection, release-to-focus, and click-to-focus
+during search with Option held. The smoke program was then removed.
 
 Both `cargo check` and strict Clippy passed for the native crate on
 `aarch64-apple-darwin` and `x86_64-apple-darwin`. Formatting passed across the
