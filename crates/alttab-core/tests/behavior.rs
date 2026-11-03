@@ -1302,3 +1302,270 @@ fn search_defaults_to_top_ranked_result_even_when_attended_window_is_present() {
     session.reconcile(vec![item(2), item(3), item(1)]);
     assert_eq!(session.selected(), Some(item(1)));
 }
+
+#[test]
+fn hover_selects_once_per_tile_and_keyboard_continues_from_hover() {
+    let mut session = open_session(vec![item(1), item(2), item(3)]);
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    assert_eq!(
+        session.handle(Input::Hover(Some(item(1)))),
+        vec![Effect::Render]
+    );
+    assert_eq!(session.selected(), Some(item(1)));
+    assert_eq!(session.selection_source(), SelectionSource::Pointer);
+    assert_eq!(
+        session.handle(Input::Cycle {
+            backward: false,
+            repeat: false,
+        }),
+        vec![Effect::Render]
+    );
+    assert_eq!(session.selected(), Some(item(2)));
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    assert!(session.handle(Input::Hover(Some(item(1)))).is_empty());
+    assert_eq!(session.selected(), Some(item(2)));
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    assert!(session.handle(Input::Hover(None)).is_empty());
+    assert_eq!(session.selected(), Some(item(2)));
+    assert_eq!(
+        session.handle(Input::Hover(Some(item(1)))),
+        vec![Effect::Render]
+    );
+    assert_eq!(session.selection_source(), SelectionSource::Pointer);
+    session.handle(Input::Arrow {
+        direction: Direction::Right,
+        repeat: false,
+    });
+    assert_eq!(session.selected(), Some(item(2)));
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    session.handle(Input::Hover(Some(item(3))));
+    session.handle(Input::Arrow {
+        direction: Direction::Down,
+        repeat: false,
+    });
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+}
+
+#[test]
+fn hover_exit_and_unknown_keys_preserve_selection() {
+    let mut session = open_session(vec![item(1), item(2), item(3)]);
+    session.handle(Input::Hover(Some(item(3))));
+    assert!(session.handle(Input::Hover(None)).is_empty());
+    assert!(session.handle(Input::Hover(Some(item(99)))).is_empty());
+    assert!(session.handle(Input::Pick(item(99))).is_empty());
+    assert_eq!(session.selected(), Some(item(3)));
+    assert_eq!(session.selection_source(), SelectionSource::Pointer);
+    assert_eq!(session.phase(), Phase::Visible);
+    assert_eq!(
+        session.handle(Input::Hover(Some(item(3)))),
+        vec![Effect::Render]
+    );
+}
+
+#[test]
+fn pick_focuses_exact_key_while_hold_is_still_pressed() {
+    let mut session = open_session(vec![item(1), item(2), item(3)]);
+    session.handle(Input::Hover(Some(item(3))));
+    assert!(session
+        .handle(Input::Modifiers(Modifiers::OPTION))
+        .is_empty());
+    let generation = session.generation();
+    assert_eq!(
+        session.handle(Input::Pick(item(1))),
+        vec![Effect::Hide { generation }, Effect::Focus(item(1))]
+    );
+    assert_eq!(session.phase(), Phase::Idle);
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    assert!(session.handle(Input::Pick(item(1))).is_empty());
+    assert!(session.handle(Input::Hover(Some(item(1)))).is_empty());
+    assert!(session
+        .handle(Input::Modifiers(Modifiers::default()))
+        .is_empty());
+}
+
+#[test]
+fn hover_release_focuses_and_cancel_only_hides() {
+    for cancel in [false, true] {
+        let mut session = open_session(vec![item(1), item(2), item(3)]);
+        session.handle(Input::Hover(Some(item(3))));
+        let generation = session.generation();
+        let effects = session.handle(if cancel {
+            Input::Cancel
+        } else {
+            Input::Modifiers(Modifiers::default())
+        });
+        let mut expected = vec![Effect::Hide { generation }];
+        if !cancel {
+            expected.push(Effect::Focus(item(3)));
+        }
+        assert_eq!(effects, expected);
+        assert_eq!(session.phase(), Phase::Idle);
+        assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    }
+}
+
+#[test]
+fn pending_show_ignores_hover_but_accepts_pick() {
+    let mut session = Session::default();
+    session.summon(
+        0,
+        Modifiers::OPTION,
+        ReleaseAction::Focus,
+        vec![item(1), item(2)],
+        Some(item(1)),
+        0,
+        100,
+    );
+    assert_eq!(session.phase(), Phase::PendingShow);
+    assert!(session.handle(Input::Hover(Some(item(1)))).is_empty());
+    assert!(session.handle(Input::Hover(None)).is_empty());
+    assert!(session.handle(Input::Pick(item(99))).is_empty());
+    assert_eq!(session.selected(), Some(item(2)));
+    assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+    let generation = session.generation();
+    assert_eq!(
+        session.handle(Input::Pick(item(1))),
+        vec![Effect::Hide { generation }, Effect::Focus(item(1))]
+    );
+}
+
+#[test]
+fn reconcile_preserves_hover_identity_until_the_key_is_removed() {
+    let mut session = open_session(vec![item(1), item(2), item(3)]);
+    session.handle(Input::Hover(Some(item(3))));
+    session.reconcile(vec![item(3), item(1), item(2)]);
+    assert_eq!(session.selected(), Some(item(3)));
+    assert_eq!(session.selection_source(), SelectionSource::Pointer);
+    session.handle(Input::Cycle {
+        backward: false,
+        repeat: false,
+    });
+    assert!(session.handle(Input::Hover(Some(item(3)))).is_empty());
+    assert_eq!(session.selected(), Some(item(1)));
+    session.reconcile(vec![item(1), item(2)]);
+    session.reconcile(vec![item(3), item(1), item(2)]);
+    assert_eq!(
+        session.handle(Input::Hover(Some(item(3)))),
+        vec![Effect::Render]
+    );
+    assert_eq!(session.selected(), Some(item(3)));
+}
+
+#[test]
+fn summon_resets_hover_identity_and_source_in_active_and_finished_sessions() {
+    let mut session = open_session(vec![item(1), item(2), item(3)]);
+    for finish in [false, true] {
+        session.handle(Input::Hover(Some(item(3))));
+        if finish {
+            session.handle(Input::Cancel);
+        }
+        session.summon(
+            0,
+            Modifiers::OPTION,
+            ReleaseAction::Focus,
+            vec![item(1), item(2), item(3)],
+            Some(item(1)),
+            0,
+            0,
+        );
+        assert_eq!(session.selection_source(), SelectionSource::Keyboard);
+        assert_eq!(
+            session.handle(Input::Hover(Some(item(3)))),
+            vec![Effect::Render]
+        );
+        assert_eq!(session.selection_source(), SelectionSource::Pointer);
+    }
+}
+
+#[test]
+fn pointer_gate_uses_strict_distance_from_initial_anchor_and_latches() {
+    assert_eq!(HOVER_DEAD_ZONE, 25.0);
+    let mut gate = PointerGate::new(HOVER_DEAD_ZONE);
+    assert!(!gate.moved(100.0, 200.0));
+    assert!(!gate.moved(100.0, 200.0));
+    assert!(!gate.moved(115.0, 220.0));
+    assert!(!gate.moved(125.0, 200.0));
+    assert!(gate.moved(125.01, 200.0));
+    assert!(gate.moved(100.0, 200.0));
+    gate.reset();
+    assert!(!gate.moved(-100.0, -200.0));
+    assert!(!gate.moved(-115.0, -220.0));
+    assert!(gate.moved(-116.0, -220.0));
+    let mut zero = PointerGate::new(0.0);
+    assert!(!zero.moved(0.0, 0.0));
+    assert!(!zero.moved(0.0, 0.0));
+    assert!(zero.moved(0.1, 0.0));
+}
+
+#[test]
+fn hit_testing_returns_tile_indices_and_excludes_padding_gaps_and_outside() {
+    let layout = Layout {
+        panel: Rect {
+            x: 100.0,
+            y: 200.0,
+            width: 90.0,
+            height: 80.0,
+        },
+        tiles: vec![
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 30.0,
+                height: 20.0,
+            },
+            Rect {
+                x: 50.0,
+                y: 10.0,
+                width: 30.0,
+                height: 20.0,
+            },
+            Rect {
+                x: 10.0,
+                y: 40.0,
+                width: 30.0,
+                height: 20.0,
+            },
+        ],
+        ..Layout::default()
+    };
+    for (x, y, index) in [(10.0, 10.0, 0), (65.0, 20.0, 1), (25.0, 50.0, 2)] {
+        assert_eq!(layout.hit_test(x, y), Some(index));
+    }
+    for (x, y) in [
+        (0.0, 0.0),
+        (9.0, 20.0),
+        (45.0, 20.0),
+        (25.0, 35.0),
+        (40.0, 20.0),
+        (25.0, 30.0),
+        (85.0, 70.0),
+        (-1.0, 20.0),
+        (90.0, 80.0),
+        (125.0, 220.0),
+    ] {
+        assert_eq!(layout.hit_test(x, y), None);
+    }
+}
+
+#[test]
+fn rect_contains_includes_minimum_edges_and_excludes_maximum_edges() {
+    let rect = Rect {
+        x: -10.0,
+        y: 20.0,
+        width: 30.0,
+        height: 40.0,
+    };
+    for (x, y) in [(-10.0, 20.0), (-10.0, 40.0), (0.0, 20.0), (19.5, 59.5)] {
+        assert!(rect.contains(x, y));
+    }
+    for (x, y) in [
+        (-10.5, 20.0),
+        (0.0, 19.5),
+        (20.0, 20.0),
+        (-10.0, 60.0),
+        (20.0, 60.0),
+    ] {
+        assert!(!rect.contains(x, y));
+    }
+    assert!(!Rect::default().contains(0.0, 0.0));
+}

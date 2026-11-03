@@ -27,6 +27,78 @@ define_class!(
     }
 );
 define_class!(
+    #[unsafe(super = objc2_app_kit::NSView)]
+    #[thread_kind = MainThreadOnly]
+    struct TileDocument;
+    unsafe impl NSObjectProtocol for TileDocument {}
+    impl TileDocument {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool { false }
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _: Option<&AnyObject>) -> bool { true }
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            objc2::rc::autoreleasepool(|_| unsafe {
+                let _: () = msg_send![super(self), updateTrackingAreas];
+                // The view retains its tracking areas. Remove only our own, in
+                // reverse order, before replacing the visible-rect tracker.
+                let areas: *mut AnyObject = msg_send![self, trackingAreas];
+                let count: usize = msg_send![areas, count];
+                for index in (0..count).rev() {
+                    let area: *mut AnyObject = msg_send![areas, objectAtIndex: index];
+                    let owner: *mut AnyObject = msg_send![area, owner];
+                    if owner == (self as *const Self).cast_mut().cast() {
+                        let _: () = msg_send![self, removeTrackingArea: area];
+                    }
+                }
+                let area: Allocated<AnyObject> = msg_send![class!(NSTrackingArea), alloc];
+                let area: Option<Retained<AnyObject>> = msg_send![area,
+                    initWithRect: ffi::rect(0.0, 0.0, 0.0, 0.0),
+                    options: (0x01usize | 0x02 | 0x80 | 0x200),
+                    owner: self, userInfo: std::ptr::null::<AnyObject>()];
+                if let Some(area) = area {
+                    let _: () = msg_send![self, addTrackingArea: &*area];
+                }
+            });
+        }
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &AnyObject) { self.post_pointer(event); }
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, event: &AnyObject) { self.post_pointer(event); }
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _: &AnyObject) { app::post(Event::PointerExited); }
+    }
+);
+impl TileDocument {
+    fn post_pointer(&self, event: &AnyObject) {
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let location: objc2_foundation::NSPoint = msg_send![event, locationInWindow];
+            let point: objc2_foundation::NSPoint =
+                msg_send![self, convertPoint: location, fromView: std::ptr::null::<AnyObject>()];
+            let bounds: NSRect = msg_send![self, bounds];
+            let screen: objc2_foundation::NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            app::post(Event::Pointer {
+                x: point.x,
+                y_from_top: bounds.size.height - point.y,
+                screen_x: screen.x,
+                screen_y: screen.y,
+            });
+        });
+    }
+}
+define_class!(
+    #[unsafe(super = objc2_app_kit::NSButton)]
+    #[thread_kind = MainThreadOnly]
+    struct TileButton;
+    unsafe impl NSObjectProtocol for TileButton {}
+    impl TileButton {
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _: Option<&AnyObject>) -> bool { true }
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool { false }
+    }
+);
+define_class!(
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
     pub struct Actions;
@@ -100,6 +172,47 @@ struct Tile {
     picture: Retained<AnyObject>,
     label: Retained<AnyObject>,
     icon: Retained<AnyObject>,
+    picture_bounds: NSRect,
+    fallback_icon_frame: NSRect,
+    // Thumbnail tiles put a small icon left of the title once an image exists;
+    // without one the large icon is centred, so the title centres under it.
+    thumbnails: bool,
+    footer_label_frame: NSRect,
+    centred_label_frame: NSRect,
+}
+impl Tile {
+    unsafe fn set_picture(&self, image: Option<&crate::capture::Image>) {
+        let layer: *mut AnyObject = msg_send![&self.picture, layer];
+        if let Some(image) = image {
+            let fitted = alttab_core::layout::aspect_fit(
+                alttab_core::Size {
+                    width: ffi::CGImageGetWidth(image.0 as ffi::Ref) as f64,
+                    height: ffi::CGImageGetHeight(image.0 as ffi::Ref) as f64,
+                },
+                alttab_core::Size {
+                    width: self.picture_bounds.size.width,
+                    height: self.picture_bounds.size.height,
+                },
+                true,
+            );
+            let _: () = msg_send![&self.picture, setFrame: ffi::rect(
+                self.picture_bounds.origin.x + (self.picture_bounds.size.width - fitted.width) / 2.0,
+                self.picture_bounds.origin.y, fitted.width, fitted.height)];
+        }
+        let _: () = msg_send![layer, setContents: image.map(|i| i.0 as *const AnyObject).unwrap_or(std::ptr::null())];
+        let _: () = msg_send![&self.picture, setHidden: image.is_none()];
+        let icon_frame = if image.is_some() {
+            ffi::rect(8.0, 10.0, 20.0, 20.0)
+        } else {
+            self.fallback_icon_frame
+        };
+        let _: () = msg_send![&self.icon, setFrame: icon_frame];
+        if self.thumbnails {
+            let footer = image.is_some();
+            let _: () = msg_send![&self.label, setAlignment: if footer { 0isize } else { 1isize }];
+            let _: () = msg_send![&self.label, setFrame: if footer { self.footer_label_frame } else { self.centred_label_frame }];
+        }
+    }
 }
 pub struct Ui {
     pub actions: Retained<Actions>,
@@ -138,6 +251,31 @@ unsafe fn passive(
         objc2::runtime::ClassBuilder::new(name, class).expect("unique passive view class");
     builder.add_method(sel!(hitTest:), hit_test as extern "C" fn(_, _, _) -> _);
     builder.register()
+}
+/// Panel corner radius. Tiles use 10 pt and thumbnails 5 pt, so nested corners
+/// shrink with their inset instead of competing with the outer shape.
+const PANEL_RADIUS: f64 = 19.0;
+/// A stretchable rounded-rect alpha mask (fixed corners, stretched centre).
+unsafe fn rounded_mask(radius: f64) -> Retained<AnyObject> {
+    let side = radius * 2.0 + 1.0;
+    let size = objc2_foundation::NSSize::new(side, side);
+    let image: Allocated<AnyObject> = msg_send![class!(NSImage), alloc];
+    let image: Retained<AnyObject> = msg_send![image, initWithSize: size];
+    let _: () = msg_send![&image, lockFocus];
+    let black: *mut AnyObject = msg_send![class!(NSColor), blackColor];
+    let _: () = msg_send![black, set];
+    let path: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPathWithRoundedRect: ffi::rect(0.0, 0.0, side, side), xRadius: radius, yRadius: radius];
+    let _: () = msg_send![path, fill];
+    let _: () = msg_send![&image, unlockFocus];
+    let insets = objc2_foundation::NSEdgeInsets {
+        top: radius,
+        left: radius,
+        bottom: radius,
+        right: radius,
+    };
+    let _: () = msg_send![&image, setCapInsets: insets];
+    let _: () = msg_send![&image, setResizingMode: 1isize];
+    image
 }
 unsafe fn new_view(class: &objc2::runtime::AnyClass, frame: NSRect) -> Retained<AnyObject> {
     let allocated: Allocated<AnyObject> = msg_send![class, alloc];
@@ -183,6 +321,8 @@ impl Ui {
             let _: () = msg_send![&panel, setCollectionBehavior: (1usize | 256usize)];
             let _: () = msg_send![&panel, setHidesOnDeactivate: false];
             let _: () = msg_send![&panel, setOpaque: false];
+            let _: () = msg_send![&panel, setAcceptsMouseMovedEvents: true];
+            let _: () = msg_send![&panel, setHasShadow: true];
             let color: *mut AnyObject = msg_send![class!(NSColor), clearColor];
             let _: () = msg_send![&panel, setBackgroundColor: color];
             let effect = new_view(
@@ -192,6 +332,13 @@ impl Ui {
             let _: () = msg_send![&effect, setMaterial: 13isize];
             let _: () = msg_send![&effect, setBlendingMode: 0isize];
             let _: () = msg_send![&effect, setState: 1isize];
+            let _: () = msg_send![&effect, setWantsLayer: true];
+            let effect_layer: *mut AnyObject = msg_send![&effect, layer];
+            let _: () = msg_send![effect_layer, setCornerRadius: PANEL_RADIUS];
+            let _: () = msg_send![effect_layer, setMasksToBounds: true];
+            // NSVisualEffectView's behind-window blur is clipped reliably only by
+            // its mask image; the layer radius alone can leave square blur corners.
+            let _: () = msg_send![&effect, setMaskImage: &*rounded_mask(PANEL_RADIUS)];
             let scroll = new_view(class!(NSScrollView), ffi::rect(0.0, 0.0, 500.0, 300.0));
             let _: () = msg_send![&scroll, setDrawsBackground: false];
             let _: () = msg_send![&scroll, setHasVerticalScroller: true];
@@ -200,7 +347,7 @@ impl Ui {
             let notifications: *mut AnyObject =
                 msg_send![class!(NSNotificationCenter), defaultCenter];
             let _: () = msg_send![notifications,addObserver:&*actions,selector:sel!(viewport:),name:&*NSString::from_str("NSViewBoundsDidChangeNotification"),object:clip];
-            let document = new_view(class!(NSView), ffi::rect(0.0, 0.0, 500.0, 300.0));
+            let document = new_view(TileDocument::class(), ffi::rect(0.0, 0.0, 500.0, 300.0));
             let _: () = msg_send![&scroll, setDocumentView: &*document];
             let _: () = msg_send![&effect, addSubview: &*scroll];
             let search = new_view(class!(NSSearchField), ffi::rect(12.0, 260.0, 476.0, 28.0));
@@ -334,6 +481,13 @@ impl Ui {
             (mouse.x, height - mouse.y)
         }
     }
+    /// Pointer in AppKit screen coordinates, the frame `Event::Pointer` uses.
+    pub fn pointer_cocoa(&self) -> (f64, f64) {
+        unsafe {
+            let mouse: objc2_foundation::NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            (mouse.x, mouse.y)
+        }
+    }
     pub fn screen(
         &self,
         placement: alttab_core::ScreenPlacement,
@@ -376,6 +530,7 @@ impl Ui {
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         layout: &Layout,
@@ -384,28 +539,47 @@ impl Ui {
         images: &HashMap<ItemKey, crate::capture::Image>,
         style: alttab_core::Style,
         searching: bool,
+        scroll: bool,
     ) {
         unsafe {
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
             let thumbnails = style == alttab_core::Style::Thumbnails;
             let titles = style == alttab_core::Style::Titles;
             self.icon_style = !thumbnails && !titles;
             while self.tiles.len() < entries.len() {
-                let tile = button(
-                    "",
-                    ffi::rect(0.0, 0.0, 1.0, 1.0),
-                    &self.actions,
-                    sel!(tile:),
-                );
+                let tile = new_view(TileButton::class(), ffi::rect(0.0, 0.0, 1.0, 1.0));
+                let _: () = msg_send![&tile, setTitle: &*NSString::from_str("")];
+                let _: () = msg_send![&tile, setTarget: &*self.actions];
+                let _: () = msg_send![&tile, setAction: sel!(tile:)];
+                let _: () = msg_send![&tile, setFocusRingType: 1usize];
                 let _: () = msg_send![&tile, setBordered: false];
                 let _: () = msg_send![&tile, setWantsLayer: true];
+                let tile_layer: *mut AnyObject = msg_send![&tile, layer];
+                let _: () = msg_send![tile_layer, setCornerRadius: 10.0f64];
+                // Keep NSButton's normal down/up action tracking, without its
+                // cell drawing a second selection highlight over our layers.
+                let cell: *mut AnyObject = msg_send![&tile, cell];
+                let _: () = msg_send![cell, setHighlightsBy: 0usize];
                 let picture = new_view(
                     passive(class!(NSView), c"AlttabPassivePicture"),
                     ffi::rect(0.0, 0.0, 1.0, 1.0),
                 );
                 let _: () = msg_send![&picture, setWantsLayer: true];
+                let picture_layer: *mut AnyObject = msg_send![&picture, layer];
+                let _: () =
+                    msg_send![picture_layer, setContentsGravity: &*NSString::from_str("resize")];
+                let _: () = msg_send![picture_layer, setCornerRadius: 5.0f64];
+                let _: () = msg_send![picture_layer, setMasksToBounds: true];
+                let _: () = msg_send![picture_layer, setBorderWidth: 0.5f64];
                 let text = label("", ffi::rect(0.0, 0.0, 1.0, 1.0));
-                let _: () = msg_send![&text, setAlignment: 1isize];
+                let font: *mut AnyObject = msg_send![class!(NSFont), systemFontOfSize: 12.0f64];
+                let _: () = msg_send![&text, setFont: font];
+                let _: () = msg_send![&text, setMaximumNumberOfLines: 1isize];
+                let _: () = msg_send![&text, setUsesSingleLineMode: true];
                 let _: () = msg_send![&text,setLineBreakMode:self.truncation];
+                let text_cell: *mut AnyObject = msg_send![&text, cell];
+                let _: () = msg_send![text_cell, setTruncatesLastVisibleLine: true];
                 let icon = new_view(
                     passive(class!(NSImageView), c"AlttabPassiveIcon"),
                     ffi::rect(0.0, 0.0, 24.0, 24.0),
@@ -420,14 +594,29 @@ impl Ui {
                     picture,
                     label: text,
                     icon,
+                    picture_bounds: ffi::rect(0.0, 0.0, 0.0, 0.0),
+                    fallback_icon_frame: ffi::rect(0.0, 0.0, 0.0, 0.0),
+                    thumbnails: false,
+                    footer_label_frame: ffi::rect(0.0, 0.0, 0.0, 0.0),
+                    centred_label_frame: ffi::rect(0.0, 0.0, 0.0, 0.0),
                 });
             }
-            let _: () = msg_send![&self.panel, setFrame: ffi::rect(layout.panel.x,layout.panel.y,layout.panel.width,layout.panel.height), display: true];
+            let frame = ffi::rect(
+                layout.panel.x,
+                layout.panel.y,
+                layout.panel.width,
+                layout.panel.height,
+            );
+            let previous_frame: NSRect = msg_send![&self.panel, frame];
+            if previous_frame != frame {
+                let _: () = msg_send![&self.panel, setFrame: frame, display: false];
+                let _: () = msg_send![&self.panel, invalidateShadow];
+            }
             let _: () = msg_send![&self.scroll, setFrame: ffi::rect(0.0,0.0,layout.panel.width,(layout.panel.height-if searching{40.0}else{0.0}).max(1.0))];
             let _: () = msg_send![&self.search,setFrame:ffi::rect(12.0,(layout.panel.height-35.0).max(0.0),(layout.panel.width-24.0).max(1.0),28.0)];
             let _: () = msg_send![&self.search,setHidden:!searching];
             let _: () = msg_send![&self.document, setFrame: ffi::rect(0.0,0.0,layout.document_size.width,layout.document_size.height)];
-            for (index, tile) in self.tiles.iter().enumerate() {
+            for (index, tile) in self.tiles.iter_mut().enumerate() {
                 let _: () = msg_send![&tile.button, setHidden: index >= entries.len()];
                 if index >= entries.len() {
                     let layer: *mut AnyObject = msg_send![&tile.picture, layer];
@@ -439,45 +628,78 @@ impl Ui {
                 let r = layout.tiles[index];
                 let _: () = msg_send![&tile.button, setFrame: ffi::rect(r.x,layout.document_size.height-r.y-r.height,r.width,r.height)];
                 let _: () = msg_send![&tile.button, setTag: index as isize];
-                let layer: *mut AnyObject = msg_send![&tile.button, layer];
-                let color: *mut AnyObject = msg_send![class!(NSColor), controlAccentColor];
-                let cg: *const objc2_core_graphics::CGColor = msg_send![color, CGColor];
-                let _: () = msg_send![layer, setBorderColor: cg];
-                let _: () = msg_send![layer, setBorderWidth: if Some(*key) == selected { 3.0f64 } else { 0.0f64 }];
-                let _: () = msg_send![layer, setCornerRadius: 9.0f64];
-                let _: () = msg_send![&tile.label, setStringValue: &*NSString::from_str(title)];
-                let _: () =
-                    msg_send![&tile.button,setAccessibilityLabel:&*NSString::from_str(title)];
-                let _: () = msg_send![&tile.label,setHidden:self.icon_style&&Some(*key)!=selected&&self.icons.contains_key(pid)];
-                let _: () = msg_send![&tile.label, setFrame: ffi::rect(if titles{40.0}else{32.0},if titles{(r.height-22.0)/2.0}else{5.0},(r.width-if titles{48.0}else{40.0}).max(1.0),22.0)];
-                let _: () = msg_send![&tile.picture, setFrame: ffi::rect(8.0,29.0,r.width-16.0,(r.height-37.0).max(1.0))];
-                let picture_layer: *mut AnyObject = msg_send![&tile.picture, layer];
-                let _: () = msg_send![picture_layer, setContentsGravity: &*NSString::from_str("resizeAspect")];
-                let image = if thumbnails {
-                    images.get(key).map(|i| i.0 as *const AnyObject)
+                let title = NSString::from_str(title);
+                let _: () = msg_send![&tile.label, setStringValue: &*title];
+                let _: () = msg_send![&tile.button, setAccessibilityLabel: &*title];
+                let label_x = if self.icon_style { 8.0 } else { 36.0 };
+                let label_y = if titles {
+                    (r.height - 20.0) / 2.0
                 } else {
-                    None
+                    10.0
                 };
-                let _: () =
-                    msg_send![picture_layer, setContents: image.unwrap_or(std::ptr::null())];
-                let _: () = msg_send![&tile.picture, setHidden: titles || image.is_none()];
+                let _: () = msg_send![&tile.label, setAlignment: if self.icon_style { 1isize } else { 0isize }];
+                let _: () = msg_send![&tile.label, setFrame: ffi::rect(label_x, label_y, (r.width - label_x - 8.0).max(1.0), 20.0)];
+                tile.thumbnails = thumbnails;
+                tile.footer_label_frame = ffi::rect(36.0, label_y, (r.width - 44.0).max(1.0), 20.0);
+                tile.centred_label_frame = ffi::rect(8.0, label_y, (r.width - 16.0).max(1.0), 20.0);
+                tile.picture_bounds = ffi::rect(
+                    8.0,
+                    40.0,
+                    (r.width - 16.0).max(0.0),
+                    (r.height - 48.0).max(0.0),
+                );
                 let icon_size = if titles {
-                    24.0
-                } else if thumbnails && image.is_some() {
                     20.0
                 } else {
                     (r.height - 40.0).min(r.width - 16.0).clamp(1.0, 128.0)
                 };
-                let _: () = msg_send![&tile.icon,setFrame:ffi::rect(if titles||image.is_some(){8.0}else{(r.width-icon_size)/2.0},if titles{(r.height-icon_size)/2.0}else if image.is_some(){5.0}else{30.0},icon_size,icon_size)];
+                tile.fallback_icon_frame = ffi::rect(
+                    if titles {
+                        8.0
+                    } else {
+                        (r.width - icon_size) / 2.0
+                    },
+                    if titles {
+                        (r.height - icon_size) / 2.0
+                    } else {
+                        30.0
+                    },
+                    icon_size,
+                    icon_size,
+                );
+                tile.set_picture(if thumbnails { images.get(key) } else { None });
                 let _: () = msg_send![&tile.icon,setImage:self.icons.get(pid).map(|icon|&**icon)];
             }
+            self.selection(
+                entries
+                    .iter()
+                    .position(|(key, _, _)| Some(*key) == selected),
+                scroll,
+            );
+            let _: () = msg_send![class!(CATransaction), commit];
+            self.show();
+        }
+    }
+    fn show(&self) {
+        unsafe {
+            let visible: bool = msg_send![&self.panel, isVisible];
+            if visible {
+                return;
+            }
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let reduce_motion: bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+            let _: () =
+                msg_send![&self.panel, setAlphaValue: if reduce_motion { 1.0f64 } else { 0.0f64 }];
             let _: () = msg_send![&self.panel, orderFrontRegardless];
-            if let Some(index) = entries
-                .iter()
-                .position(|(key, _, _)| Some(*key) == selected)
-            {
-                let frame: NSRect = msg_send![&self.tiles[index].button, frame];
-                let _: bool = msg_send![&self.document, scrollRectToVisible: frame];
+            if !reduce_motion {
+                let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+                let context: *mut AnyObject = msg_send![class!(NSAnimationContext), currentContext];
+                let _: () = msg_send![context, setDuration: 0.12f64];
+                let timing: *mut AnyObject = msg_send![class!(CAMediaTimingFunction), functionWithName: &*NSString::from_str("easeOut")];
+                let _: () = msg_send![context, setTimingFunction: timing];
+                let animator: *mut AnyObject = msg_send![&self.panel, animator];
+                let _: () = msg_send![animator, setAlphaValue: 1.0f64];
+                let _: () = msg_send![class!(NSAnimationContext), endGrouping];
             }
         }
     }
@@ -505,18 +727,54 @@ impl Ui {
             self.icons.retain(|pid, _| apps.contains_key(pid));
         }
     }
-    pub fn selection(&self, index: Option<usize>) {
+    pub fn selection(&self, index: Option<usize>, scroll: bool) {
         unsafe {
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let previous: Option<Retained<AnyObject>> =
+                msg_send![class!(NSAppearance), currentAppearance];
+            let appearance: *mut AnyObject = msg_send![&self.panel, effectiveAppearance];
+            let _: () = msg_send![class!(NSAppearance), setCurrentAppearance: appearance];
+            let accent: *mut AnyObject = msg_send![class!(NSColor), controlAccentColor];
+            let fill: *mut AnyObject = msg_send![accent, colorWithAlphaComponent: 0.22f64];
+            let ring: *mut AnyObject = msg_send![accent, colorWithAlphaComponent: 0.55f64];
+            let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+            let label: *mut AnyObject = msg_send![class!(NSColor), labelColor];
+            let secondary: *mut AnyObject = msg_send![class!(NSColor), secondaryLabelColor];
+            let hairline: *mut AnyObject = msg_send![label, colorWithAlphaComponent: 0.1f64];
+            let fill_cg: *const objc2_core_graphics::CGColor = msg_send![fill, CGColor];
+            let ring_cg: *const objc2_core_graphics::CGColor = msg_send![ring, CGColor];
+            let clear_cg: *const objc2_core_graphics::CGColor = msg_send![clear, CGColor];
+            let hairline_cg: *const objc2_core_graphics::CGColor = msg_send![hairline, CGColor];
             for (i, tile) in self.tiles.iter().enumerate() {
+                let selected = Some(i) == index;
                 let layer: *mut AnyObject = msg_send![&tile.button, layer];
-                let _: () = msg_send![layer,setBorderWidth:if Some(i)==index{3.0f64}else{0.0f64}];
-                let icon: *mut AnyObject = msg_send![&tile.icon, image];
-                let _: () = msg_send![&tile.label,setHidden:self.icon_style&&Some(i)!=index&&!icon.is_null()];
+                let _: () =
+                    msg_send![layer, setBackgroundColor: if selected { fill_cg } else { clear_cg }];
+                let _: () =
+                    msg_send![layer, setBorderColor: if selected { ring_cg } else { clear_cg }];
+                let _: () =
+                    msg_send![layer, setBorderWidth: if selected { 1.0f64 } else { 0.0f64 }];
+                let _: () =
+                    msg_send![&tile.label, setTextColor: if selected { label } else { secondary }];
+                let hide_label = if self.icon_style {
+                    let icon: *mut AnyObject = msg_send![&tile.icon, image];
+                    !selected || icon.is_null()
+                } else {
+                    false
+                };
+                let _: () = msg_send![&tile.label, setHidden: hide_label];
+                let picture: *mut AnyObject = msg_send![&tile.picture, layer];
+                let _: () = msg_send![picture, setBorderColor: hairline_cg];
             }
-            if let Some(tile) = index.and_then(|i| self.tiles.get(i)) {
-                let frame: NSRect = msg_send![&tile.button, frame];
-                let _: bool = msg_send![&self.document,scrollRectToVisible:frame];
+            let _: () = msg_send![class!(NSAppearance), setCurrentAppearance: previous.as_deref()];
+            if scroll {
+                if let Some(tile) = index.and_then(|i| self.tiles.get(i)) {
+                    let frame: NSRect = msg_send![&tile.button, frame];
+                    let _: bool = msg_send![&self.document, scrollRectToVisible: frame];
+                }
             }
+            let _: () = msg_send![class!(CATransaction), commit];
         }
     }
     pub fn viewport(&self) -> (f64, f64) {
@@ -531,12 +789,10 @@ impl Ui {
     pub fn screenshot(&self, index: usize, image: Option<&crate::capture::Image>) {
         unsafe {
             if let Some(tile) = self.tiles.get(index) {
-                let layer: *mut AnyObject = msg_send![&tile.picture, layer];
-                let _: () = msg_send![layer,setContents:image.map(|i|i.0 as *const AnyObject).unwrap_or(std::ptr::null())];
-                let _: () = msg_send![&tile.picture,setHidden:image.is_none()];
-                if image.is_some() {
-                    let _: () = msg_send![&tile.icon,setFrame:ffi::rect(8.0,5.0,20.0,20.0)];
-                }
+                let _: () = msg_send![class!(CATransaction), begin];
+                let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+                tile.set_picture(image);
+                let _: () = msg_send![class!(CATransaction), commit];
             }
         }
     }
@@ -594,6 +850,13 @@ impl Ui {
     pub fn hide(&mut self) {
         unsafe {
             let _: () = msg_send![&self.panel, orderOut: std::ptr::null::<AnyObject>()];
+            let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+            let context: *mut AnyObject = msg_send![class!(NSAnimationContext), currentContext];
+            let _: () = msg_send![context, setDuration: 0.0f64];
+            let animator: *mut AnyObject = msg_send![&self.panel, animator];
+            let _: () = msg_send![animator, setAlphaValue: 1.0f64];
+            let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+            let _: () = msg_send![&self.panel, setAlphaValue: 1.0f64];
             for tile in &self.tiles {
                 let layer: *mut AnyObject = msg_send![&tile.picture, layer];
                 let _: () = msg_send![layer, setContents: std::ptr::null::<AnyObject>()];

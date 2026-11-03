@@ -220,6 +220,15 @@ these flags work. No retained screenshot NSImage per tracked window. Layer
 contents are attached only for displayed tiles and cleared during dismissal.
 App icons are deduplicated per application and separately bounded.
 
+Hover selects after the pointer moves more than 25 points from where it rested
+when the panel appeared (upstream's dead zone); only a changed hovered item updates selection.
+Keyboard navigation continues from that item and alone scrolls selection into
+view. Clicks resolve rendered tile indices to stable item keys and dismiss before
+focusing, including during search. Selection colours change instantly with implicit
+layer animations disabled; rounded tiles and aspect-fitted, outlined thumbnails
+retain their geometry during selection. Only panel entrance fades (120 ms ease-out),
+unless Reduce Motion is enabled; dismissal is immediate and cancels the fade.
+
 ## macOS execution and FFI ownership
 
 **Decision:** keep one model/coordinator owner on the AppKit main thread. All
